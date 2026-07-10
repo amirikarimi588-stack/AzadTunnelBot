@@ -13,21 +13,24 @@ const bot = new TelegramBot(BOT_TOKEN, { polling: true });
 // -----------------------------
 // کیبورد ثابت پایین صفحه
 // -----------------------------
-const mainKeyboard = {
-  reply_markup: {
-    keyboard: [
-      ["🛒 خرید سرویس", "📂 سرویس‌های من"],
-      ["👤 حساب کاربری", "💳 کیف پول"],
-      ["🧭 راهنمایی", "🆘 پشتیبانی"]
-    ],
-    resize_keyboard: true,
-    one_time_keyboard: false
-  }
-};
+const mainKeyboardLayout = [
+  ["🛒 خرید سرویس", "📂 سرویس‌های من"],
+  ["👤 حساب کاربری", "💳 کیف پول"],
+  ["🧭 راهنمایی", "🆘 پشتیبانی"]
+];
 
-function ensureKeyboard(uid, text) {
-  if (!text || text.length < 2) {
-    bot.sendMessage(uid, "منوی اصلی آزاد تونل 🏔️", mainKeyboard);
+let keyboardActivated = {};
+
+function ensureKeyboard(uid) {
+  if (!keyboardActivated[uid]) {
+    bot.sendMessage(uid, ".", {
+      reply_markup: {
+        keyboard: mainKeyboardLayout,
+        resize_keyboard: true,
+        one_time_keyboard: false
+      }
+    });
+    keyboardActivated[uid] = true;
   }
 }
 
@@ -35,15 +38,15 @@ function ensureKeyboard(uid, text) {
 // دیتابیس ساده
 // -----------------------------
 let users = {};
-let waitingConfig = {};   // برای ارسال کانفیگ/QR
-let pendingWalletPay = {}; // برای پرداخت از کیف پول
+let waitingConfig = {};      // برای کانفیگ و QR
+let pendingWalletPay = {};   // پرداخت از کیف پول
+let walletTopupState = {};   // وارد کردن مبلغ شارژ
 
 function getUser(uid) {
   if (!users[uid]) {
     users[uid] = {
       services: [],          // {id, name, size, price, subLink, configText, qrFileId}
       pendingService: null,  // {name, size, price}
-      pendingWallet: null,   // {amount}
       balance: 0
     };
   }
@@ -82,7 +85,8 @@ bot.onText(/\/start/, async (msg) => {
       }
     );
   } else {
-    bot.sendMessage(uid, "منوی اصلی آزاد تونل 🏔️", mainKeyboard);
+    ensureKeyboard(uid);
+    bot.sendMessage(uid, "به آزاد تونل خوش آمدید 🏔️");
   }
 });
 
@@ -95,28 +99,61 @@ bot.on("message", (msg) => {
   const u = getUser(uid);
 
   if (msg.chat.type === "private") {
-    ensureKeyboard(uid, text);
+    ensureKeyboard(uid);
   }
 
   if (!text) return;
 
-  // اگر ادمین در حالت انتظار کانفیگ متنی است
-  if (waitingConfig[uid] && waitingConfig[uid].mode === "config_text") {
-    const { target, serviceId } = waitingConfig[uid];
+  // ادمین در حالت انتظار لینک/کانفیگ
+  if (waitingConfig[uid] && waitingConfig[uid].mode === "config") {
+    const { target, serviceId, stage } = waitingConfig[uid];
     const tu = getUser(target);
     const svc = tu.services.find(s => s.id === serviceId);
-    if (svc) {
+    if (!svc) {
+      waitingConfig[uid] = null;
+      return;
+    }
+
+    if (stage === "sub") {
+      svc.subLink = text;
+      waitingConfig[uid].stage = "cfg";
+      bot.sendMessage(uid, "🔗 لینک اشتراک ثبت شد. حالا کانفیگ را ارسال کنید.");
+      return;
+    }
+
+    if (stage === "cfg") {
       svc.configText = text;
       bot.sendMessage(
         target,
         `✅ لینک شما آماده‌ست\n\n` +
-        `📦 سرویس: ${svc.name} (${svc.size})\n` +
+        `📛 نام سرویس: ${svc.name}\n` +
+        `📏 حجم: ${svc.size}\n` +
+        `💰 قیمت: ${svc.price} تومان\n\n` +
         (svc.subLink ? `🔗 لینک اشتراک:\n${svc.subLink}\n\n` : "") +
-        `📄 کانفیگ:\n${text}`
+        `📄 کانفیگ:\n${svc.configText}`
       );
-      bot.sendMessage(uid, "✔️ کانفیگ متنی برای کاربر ارسال و ذخیره شد.");
+      bot.sendMessage(uid, "✔️ کانفیگ برای کاربر ارسال و ذخیره شد.");
+      waitingConfig[uid] = null;
+      return;
     }
-    waitingConfig[uid] = null;
+  }
+
+  // وارد کردن مبلغ شارژ کیف پول
+  if (walletTopupState[uid] && walletTopupState[uid].step === "amount") {
+    const amount = parseInt(text.replace(/\D/g, ""), 10);
+    if (isNaN(amount) || amount < 20000 || amount > 100000000) {
+      bot.sendMessage(
+        uid,
+        "❌ مبلغ نامعتبر است.\nحداقل ۲۰,۰۰۰ و حداکثر ۱۰۰,۰۰۰,۰۰۰ تومان.\nلطفاً دوباره مبلغ را به تومان وارد کنید."
+      );
+      return;
+    }
+    walletTopupState[uid].amount = amount;
+    walletTopupState[uid].step = "photo";
+    bot.sendMessage(
+      uid,
+      `✅ مبلغ ${amount} تومان ثبت شد.\nحالا لطفاً عکس فیش واریزی را ارسال کنید.`
+    );
     return;
   }
 
@@ -214,22 +251,22 @@ bot.on("callback_query", async (c) => {
         chat_id: uid,
         message_id: c.message.message_id
       });
-      ensureKeyboard(uid, ".");
+      ensureKeyboard(uid);
     } else {
       bot.answerCallbackQuery(c.id, { text: "❌ هنوز عضو کانال نیستی." });
     }
     return;
   }
 
-  // افزایش موجودی کیف پول
-  if (c.data === "wallet_add") {
-    u.pendingWallet = { amount: 0 };
+  // افزایش موجودی کیف پول (از منو یا دکمه افزایش اعتبار)
+  if (c.data === "wallet_add" || c.data === "wallet_add_from_insufficient") {
+    walletTopupState[uid] = { step: "amount", amount: null };
     bot.editMessageText(
       "💳 افزایش موجودی کیف پول\n\n" +
       "حداقل مبلغ: ۲۰,۰۰۰ تومان\n" +
-      "حداکثر مبلغ: ۱۰۰,۰۰۰,000 تومان\n\n" +
+      "حداکثر مبلغ: ۱۰۰,۰۰۰,۰۰۰ تومان\n\n" +
       `💳 شماره کارت:\n${CARD_NUMBER}\nبه نام کریمی\n\n` +
-      "📸 لطفاً بعد از پرداخت، عکس فیش را ارسال کنید و منتظر تایید بمانید.",
+      "🔢 مبلغ مورد نظر را به تومان وارد کنید:",
       { chat_id: uid, message_id: c.message.message_id }
     );
     return;
@@ -375,7 +412,15 @@ bot.on("callback_query", async (c) => {
         `💰 قیمت سرویس: ${ps.price} تومان\n` +
         `💼 موجودی فعلی کیف پول: ${u.balance} تومان\n\n` +
         `لطفاً ابتدا کیف پول خود را شارژ کنید.`,
-        { chat_id: uid, message_id: c.message.message_id }
+        {
+          chat_id: uid,
+          message_id: c.message.message_id,
+          reply_markup: {
+            inline_keyboard: [
+              [{ text: "➕ افزایش اعتبار", callback_data: "wallet_add_from_insufficient" }]
+            ]
+          }
+        }
       );
       return;
     }
@@ -445,11 +490,9 @@ bot.on("callback_query", async (c) => {
     }
     const ps = pw.service;
 
-    // کم کردن از کیف پول
     tu.balance -= ps.price;
     const newBalance = tu.balance;
 
-    // ثبت سرویس
     const serviceId = Date.now().toString();
     tu.services.push({
       id: serviceId,
@@ -461,7 +504,6 @@ bot.on("callback_query", async (c) => {
       qrFileId: null
     });
 
-    // اطلاع به کاربر
     bot.sendMessage(
       targetUser,
       `✅ پرداخت با موفقیت انجام شد.\n\n` +
@@ -555,13 +597,54 @@ bot.on("callback_query", async (c) => {
       qrFileId: null
     });
 
-    waitingConfig[uid] = { target: targetUser, serviceId, mode: "config_text" };
+    waitingConfig[uid] = { target: targetUser, serviceId, mode: "config", stage: "sub" };
 
     bot.sendMessage(
       uid,
-      "🔧 لطفاً لینک اشتراک (سابسکریپشن) و سپس کانفیگ را برای این سرویس ارسال کنید.\nهرچه می‌فرستی برای کاربر ذخیره می‌شود."
+      "🔧 لطفاً ابتدا لینک اشتراک (سابسکریپشن) و سپس کانفیگ را برای این سرویس ارسال کنید.\nهرچه می‌فرستی برای کاربر ذخیره می‌شود."
     );
     bot.answerCallbackQuery(c.id, { text: "در انتظار لینک و کانفیگ..." });
+    return;
+  }
+
+  // تایید شارژ کیف پول (ادمین)
+  if (c.data.startsWith("walletok_")) {
+    if (uid !== ADMIN_ID) {
+      bot.answerCallbackQuery(c.id, { text: "این دکمه فقط برای ادمین است." });
+      return;
+    }
+    const targetUser = c.data.split("_")[1];
+    const tu = getUser(targetUser);
+    const amount = parseInt(c.data.split("_")[2], 10) || 0;
+    tu.balance += amount;
+
+    bot.sendMessage(
+      targetUser,
+      `✅ فیش شما تایید شد.\nمبلغ ${amount} تومان به کیف پول شما واریز شد.\nموجودی فعلی: ${tu.balance} تومان`,
+      {
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: "🛒 خرید سرویس", callback_data: "go_buy_service" }]
+          ]
+        }
+      }
+    );
+    bot.sendMessage(uid, `✔️ کیف پول کاربر ${targetUser} به مبلغ ${amount} تومان شارژ شد.`);
+    bot.answerCallbackQuery(c.id, { text: "شارژ تایید شد." });
+    return;
+  }
+
+  // رفتن به خرید سرویس بعد از شارژ
+  if (c.data === "go_buy_service") {
+    bot.sendMessage(uid, "🌐 لطفاً نوع تعرفه را انتخاب کنید:", {
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: "🌤 تعرفه‌های سبک", callback_data: "light" }],
+          [{ text: "🌋 تعرفه‌های سنگین", callback_data: "heavy" }]
+        ]
+      }
+    });
+    bot.answerCallbackQuery(c.id);
     return;
   }
 });
@@ -591,23 +674,24 @@ bot.on("photo", (msg) => {
     return;
   }
 
-  // شارژ کیف پول
-  if (u.pendingWallet) {
+  // شارژ کیف پول (با مبلغ وارد شده)
+  if (walletTopupState[uid] && walletTopupState[uid].step === "photo") {
+    const amount = walletTopupState[uid].amount || 0;
     bot.sendMessage(uid, "📸 فیش شارژ کیف پول دریافت شد. منتظر تایید باشید.");
 
     bot.sendPhoto(ADMIN_ID, msg.photo[msg.photo.length - 1].file_id, {
       caption:
         `📥 فیش شارژ کیف پول:\n` +
         `👤 کاربر: ${uid}\n` +
-        `💳 درخواست شارژ کیف پول\n` +
-        `⚠️ مبلغ را از روی فیش بخوانید.`,
+        `💰 مبلغ: ${amount} تومان\n`,
       reply_markup: {
         inline_keyboard: [
-          [{ text: "✔️ تایید شارژ حساب", callback_data: `walletok_${uid}` }]
+          [{ text: "✔️ تایید شارژ حساب", callback_data: `walletok_${uid}_${amount}` }]
         ]
       }
     });
 
+    walletTopupState[uid] = null;
     return;
   }
 
@@ -639,7 +723,7 @@ bot.on("photo", (msg) => {
 });
 
 // -----------------------------
-// ثبت لینک اشتراک و QR با دستورات
+// ثبت لینک اشتراک و QR با دستورات اختیاری
 // -----------------------------
 bot.onText(/\/setsub (\d+) (.+)/, (msg, match) => {
   if (msg.from.id !== ADMIN_ID) return;
