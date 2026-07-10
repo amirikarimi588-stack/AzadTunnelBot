@@ -27,7 +27,7 @@ function loadDB() {
       const raw = fs.readFileSync(DB_PATH, "utf8");
       db = JSON.parse(raw);
     }
-  } catch (e) {
+  } catch {
     db = { users: {} };
   }
 }
@@ -50,7 +50,7 @@ function getUser(uid) {
     db.users[uid] = {
       id: uid,
       username: null,
-      services: [],          // {id, name, size, price, subLink, configText, qrFileId}
+      services: [],          // {id, name, size, price, subLink, qrFileId}
       pendingService: null,  // {name, size, price}
       balance: 0
     };
@@ -87,9 +87,10 @@ const mainKeyboard = {
 // -----------------------------
 // وضعیت‌ها
 // -----------------------------
-let waitingConfig = {};      // برای لینک اشتراک و کانفیگ و QR
+let waitingConfig = {};      // برای لینک و QR
 let pendingWalletPay = {};   // پرداخت از کیف پول
 let walletTopupState = {};   // وارد کردن مبلغ شارژ
+let pendingConfigs = [];     // صف سرویس‌های در انتظار کانفیگ/QR برای ادمین
 
 // -----------------------------
 // /start
@@ -117,7 +118,41 @@ bot.onText(/\/start/, async (msg) => {
     bot.sendMessage(uid, "به آزاد تونل خوش آمدید 🏔️", {
       reply_markup: { ...mainKeyboard }
     });
+    if (uid === ADMIN_ID) {
+      bot.sendMessage(
+        uid,
+        "📊 برای مدیریت سرویس‌های در انتظار، از دستور /panel استفاده کن.",
+        { reply_markup: { ...mainKeyboard } }
+      );
+    }
   }
+});
+
+// -----------------------------
+// داشبورد ادمین
+// -----------------------------
+bot.onText(/\/panel/, (msg) => {
+  const uid = msg.from.id;
+  if (uid !== ADMIN_ID) return;
+
+  if (!pendingConfigs.length) {
+    bot.sendMessage(uid, "📊 هیچ سرویس در صف انتظار برای ارسال کانفیگ و QR نیست.", {
+      reply_markup: { ...mainKeyboard }
+    });
+    return;
+  }
+
+  const rows = pendingConfigs.map((item, index) => {
+    const u = getUser(item.userId);
+    return [{
+      text: `👤 ${item.userId} | ${item.serviceName} (${item.serviceSize})`,
+      callback_data: `cfgsel_${index}`
+    }];
+  });
+
+  bot.sendMessage(uid, "📊 سرویس‌های در صف انتظار:", {
+    reply_markup: { inline_keyboard: rows }
+  });
 });
 
 // -----------------------------
@@ -132,7 +167,7 @@ bot.on("message", (msg) => {
 
   if (!text) return;
 
-  // ادمین در حالت انتظار لینک/کانفیگ برای سرویس
+  // ادمین در حالت انتظار لینک/کانفیگ برای سرویس (فقط یک لینک اشتراک/کانفیگ)
   if (waitingConfig[uid] && waitingConfig[uid].mode === "config") {
     const { target, serviceId, stage } = waitingConfig[uid];
     const tu = getUser(target);
@@ -142,29 +177,11 @@ bot.on("message", (msg) => {
       return;
     }
 
-    if (stage === "sub") {
-      svc.subLink = text;
-      waitingConfig[uid].stage = "cfg";
+    if (stage === "link") {
+      svc.subLink = text; // همین لینک، لینک اشتراک/کانفیگ است
+      waitingConfig[uid].stage = "qr";
       saveDB();
-      bot.sendMessage(uid, "🔗 لینک اشتراک ثبت شد. حالا کانفیگ را ارسال کنید.");
-      return;
-    }
-
-    if (stage === "cfg") {
-      svc.configText = text;
-      saveDB();
-      bot.sendMessage(
-        target,
-        `✅ لینک شما آماده‌ست\n\n` +
-        `📛 نام سرویس: ${svc.name}\n` +
-        `📏 حجم: ${svc.size}\n` +
-        `💰 قیمت: ${svc.price} تومان\n` +
-        `👤 نام کاربری شما: ${tu.username ? "@" + tu.username : "ثبت نشده"}\n\n` +
-        (svc.subLink ? `🔗 لینک اشتراک:\n${svc.subLink}\n\n` : "") +
-        `📄 کانفیگ:\n${svc.configText}`
-      );
-      bot.sendMessage(uid, "✅ کانفیگ برای مخاطب ارسال شد.");
-      waitingConfig[uid] = null;
+      bot.sendMessage(uid, "🔗 لینک اشتراک/کانفیگ ثبت شد. حالا عکس QR را ارسال کنید.");
       return;
     }
   }
@@ -545,10 +562,18 @@ bot.on("callback_query", async (c) => {
       size: ps.size,
       price: ps.price,
       subLink: "",
-      configText: "",
       qrFileId: null
     });
+    tu.pendingService = null;
     saveDB();
+
+    // اضافه کردن به صف داشبورد ادمین
+    pendingConfigs.push({
+      userId: targetUser,
+      serviceId,
+      serviceName: ps.name,
+      serviceSize: ps.size
+    });
 
     bot.sendMessage(
       targetUser,
@@ -564,16 +589,8 @@ bot.on("callback_query", async (c) => {
     bot.sendMessage(
       ADMIN_ID,
       `✔ پرداخت از کیف پول کاربر ${targetUser} تایید شد.\n` +
-      `لطفاً لینک اشتراک، کانفیگ و QR را برای این سرویس ارسال کنید.`
+      `این سرویس در صف داشبورد قرار گرفت. برای ارسال لینک و QR از /panel استفاده کن.`
     );
-
-    // آماده‌سازی برای دریافت لینک و کانفیگ از ادمین
-    waitingConfig[ADMIN_ID] = {
-      target: targetUser,
-      serviceId,
-      mode: "config",
-      stage: "sub"
-    };
 
     pendingWalletPay[targetUser] = null;
     bot.answerCallbackQuery(c.id, { text: "پرداخت تایید شد." });
@@ -596,8 +613,7 @@ bot.on("callback_query", async (c) => {
       `💰 قیمت: ${svc.price} تومان\n` +
       `👤 نام کاربری شما: ${u.username ? "@" + u.username : "ثبت نشده"}\n\n`;
 
-    if (svc.subLink) text += `🔗 لینک اشتراک:\n${svc.subLink}\n\n`;
-    if (svc.configText) text += `📄 کانفیگ:\n${svc.configText}\n\n`;
+    if (svc.subLink) text += `🔗 لینک اشتراک/کانفیگ:\n${svc.subLink}\n\n`;
 
     text += "لینک شما آماده‌ست ✅";
 
@@ -628,46 +644,45 @@ bot.on("callback_query", async (c) => {
     return;
   }
 
-  // دکمه ارسال کانفیگ (کارت به کارت)
-  if (c.data.startsWith("sendcfg_")) {
+  // انتخاب سرویس از داشبورد برای ارسال لینک و QR
+  if (c.data.startsWith("cfgsel_")) {
     if (uid !== ADMIN_ID) {
       bot.answerCallbackQuery(c.id, { text: "این دکمه فقط برای ادمین است." });
       return;
     }
-
-    const targetUser = c.data.split("_")[1];
-    const tu = getUser(targetUser);
-    const ps = tu.pendingService;
-    if (!ps) {
-      bot.answerCallbackQuery(c.id, { text: "هیچ سرویس در انتظار تایید نیست." });
+    const index = parseInt(c.data.split("_")[1], 10);
+    const item = pendingConfigs[index];
+    if (!item) {
+      bot.answerCallbackQuery(c.id, { text: "این مورد دیگر در صف نیست." });
       return;
     }
 
-    const serviceId = Date.now().toString();
-    tu.services.push({
-      id: serviceId,
-      name: ps.name,
-      size: ps.size,
-      price: ps.price,
-      subLink: "",
-      configText: "",
-      qrFileId: null
-    });
-    tu.pendingService = null;
-    saveDB();
+    const tu = getUser(item.userId);
+    const svc = tu.services.find(s => s.id === item.serviceId);
+    if (!svc) {
+      pendingConfigs.splice(index, 1);
+      bot.answerCallbackQuery(c.id, { text: "سرویس یافت نشد." });
+      return;
+    }
 
     waitingConfig[ADMIN_ID] = {
-      target: targetUser,
-      serviceId,
+      target: item.userId,
+      serviceId: item.serviceId,
       mode: "config",
-      stage: "sub"
+      stage: "link"
     };
 
-    bot.sendMessage(
-      uid,
-      "🔧 لطفاً ابتدا لینک اشتراک (سابسکریپشن) و سپس کانفیگ را برای این سرویس ارسال کنید.\nهرچه می‌فرستی برای کاربر ذخیره می‌شود."
+    pendingConfigs.splice(index, 1);
+
+    bot.editMessageText(
+      `🔧 ارسال لینک و QR برای کاربر ${item.userId}\n` +
+      `📛 سرویس: ${svc.name}\n` +
+      `📏 حجم: ${svc.size}\n\n` +
+      `لطفاً ابتدا لینک اشتراک/کانفیگ را ارسال کن، سپس عکس QR را.`,
+      { chat_id: uid, message_id: c.message.message_id }
     );
-    bot.answerCallbackQuery(c.id, { text: "در انتظار لینک و کانفیگ..." });
+
+    bot.answerCallbackQuery(c.id, { text: "آماده دریافت لینک و QR." });
     return;
   }
 
@@ -723,19 +738,30 @@ bot.on("photo", (msg) => {
   const u = getUser(uid);
 
   // QR برای سرویس (ادمین)
-  if (waitingConfig[uid] && waitingConfig[uid].mode === "qr") {
+  if (waitingConfig[uid] && waitingConfig[uid].mode === "config" && waitingConfig[uid].stage === "qr") {
     const { target, serviceId } = waitingConfig[uid];
     const tu = getUser(target);
     const svc = tu.services.find(s => s.id === serviceId);
     if (svc) {
       svc.qrFileId = msg.photo[msg.photo.length - 1].file_id;
       saveDB();
-      bot.sendPhoto(
-        target,
-        svc.qrFileId,
-        { caption: "🔳 QR سرویس شما" }
-      );
-      bot.sendMessage(uid, "✔️ QR برای مخاطب ارسال شد.");
+
+      // ارسال کامل برای مخاطب: لینک + QR
+      let text =
+        `✅ لینک شما آماده‌ست\n\n` +
+        `📛 نام سرویس: ${svc.name}\n` +
+        `📏 حجم: ${svc.size}\n` +
+        `💰 قیمت: ${svc.price} تومان\n` +
+        `👤 نام کاربری شما: ${tu.username ? "@" + tu.username : "ثبت نشده"}\n\n`;
+
+      if (svc.subLink) text += `🔗 لینک اشتراک/کانفیگ:\n${svc.subLink}\n\n`;
+
+      text += "لطفاً لینک را در اپ‌های معرفی‌شده در بخش راهنمایی وارد کنید.";
+
+      bot.sendMessage(target, text, { reply_markup: { ...mainKeyboard } });
+      bot.sendPhoto(target, svc.qrFileId, { caption: "🔳 QR سرویس شما" });
+
+      bot.sendMessage(uid, "✅ لینک و QR برای مخاطب ارسال شد.");
     }
     waitingConfig[uid] = null;
     return;
@@ -779,7 +805,7 @@ bot.on("photo", (msg) => {
         `💰 قیمت: ${u.pendingService.price} تومان`,
       reply_markup: {
         inline_keyboard: [
-          [{ text: "✔️ ارسال کانفیگ", callback_data: `sendcfg_${uid}` }]
+          [{ text: "✔️ تایید و افزودن به صف کانفیگ", callback_data: `sendcfg_${uid}` }]
         ]
       }
     });
@@ -795,21 +821,417 @@ bot.on("photo", (msg) => {
 });
 
 // -----------------------------
-// ثبت QR با دستور اختیاری
+// تایید سرویس کارت به کارت → افزودن به صف داشبورد
 // -----------------------------
-bot.onText(/\/setqr (\d+)/, (msg, match) => {
-  if (msg.from.id !== ADMIN_ID) return;
+bot.on("callback_query", (c) => {
+  const uid = c.from.id;
+  if (c.data.startsWith("sendcfg_")) {
+    if (uid !== ADMIN_ID) {
+      bot.answerCallbackQuery(c.id, { text: "این دکمه فقط برای ادمین است." });
+      return;
+    }
 
-  const targetUser = match[1];
-  const tu = getUser(targetUser);
+    const targetUser = c.data.split("_")[1];
+    const tu = getUser(targetUser);
+    const ps = tu.pendingService;
+    if (!ps) {
+      bot.answerCallbackQuery(c.id, { text: "هیچ سرویس در انتظار تایید نیست." });
+      return;
+    }
 
-  if (!tu.services.length) {
-    bot.sendMessage(msg.chat.id, "این کاربر هیچ سرویسی ندارد.");
+    const serviceId = Date.now().toString();
+    tu.services.push({
+      id: serviceId,
+      name: ps.name,
+      size: ps.size,
+      price: ps.price,
+      subLink: "",
+      qrFileId: null
+    });
+    tu.pendingService = null;
+    saveDB();
+
+    pendingConfigs.push({
+      userId: targetUser,
+      serviceId,
+      serviceName: ps.name,
+      serviceSize: ps.size
+    });
+
+    bot.sendMessage(
+      targetUser,
+      "✅ فیش شما تایید شد.\nسرویس شما ثبت شد.\nلطفاً منتظر دریافت لینک و QR باشید.",
+      { reply_markup: { ...mainKeyboard } }
+    );
+
+    bot.sendMessage(
+      ADMIN_ID,
+      `✔ سرویس کارت به کارت کاربر ${targetUser} تایید شد.\nاین سرویس در صف داشبورد قرار گرفت. برای ارسال لینک و QR از /panel استفاده کن.`
+    );
+
+    bot.answerCallbackQuery(c.id, { text: "سرویس به صف کانفیگ اضافه شد." });
+  }
+});
+``````js
+const TelegramBot = require("node-telegram-bot-api");
+const fs = require("fs");
+const path = require("path");
+
+// -----------------------------
+// تنظیمات اصلی
+// -----------------------------
+const BOT_TOKEN = process.env.BOT_TOKEN;
+const MAIN_CHANNEL = "@Azadtunnel1";
+const ADMIN_ID = 8571263967;
+const CARD_NUMBER = "6219861435903868";
+
+const bot = new TelegramBot(BOT_TOKEN, { polling: true });
+
+// -----------------------------
+// دیتابیس ساده با فایل JSON
+// -----------------------------
+const DB_PATH = path.join(__dirname, "db.json");
+
+let db = {
+  users: {}
+};
+
+function loadDB() {
+  try {
+    if (fs.existsSync(DB_PATH)) {
+      const raw = fs.readFileSync(DB_PATH, "utf8");
+      db = JSON.parse(raw);
+    }
+  } catch {
+    db = { users: {} };
+  }
+}
+
+function saveDB() {
+  try {
+    fs.writeFileSync(DB_PATH, JSON.stringify(db, null, 2), "utf8");
+  } catch (e) {
+    console.error("DB save error:", e);
+  }
+}
+
+loadDB();
+
+// -----------------------------
+// ساختار کاربر
+// -----------------------------
+function getUser(uid) {
+  if (!db.users[uid]) {
+    db.users[uid] = {
+      id: uid,
+      username: null,
+      services: [],          // {id, name, size, price, subLink, qrFileId}
+      pendingService: null,  // {name, size, price}
+      balance: 0
+    };
+    saveDB();
+  }
+  return db.users[uid];
+}
+
+// -----------------------------
+// چک عضویت کانال
+// -----------------------------
+async function isMember(uid) {
+  try {
+    const m = await bot.getChatMember(MAIN_CHANNEL, uid);
+    return ["member", "administrator", "creator"].includes(m.status);
+  } catch {
+    return false;
+  }
+}
+
+// -----------------------------
+// کیبورد اصلی
+// -----------------------------
+const mainKeyboard = {
+  keyboard: [
+    ["🛒 خرید سرویس", "📂 سرویس‌های من"],
+    ["👤 حساب کاربری", "💳 کیف پول"],
+    ["🧭 راهنمایی", "🆘 پشتیبانی"]
+  ],
+  resize_keyboard: true,
+  one_time_keyboard: false
+};
+
+// -----------------------------
+// وضعیت‌ها
+// -----------------------------
+let waitingConfig = {};      // برای لینک و QR
+let pendingWalletPay = {};   // پرداخت از کیف پول
+let walletTopupState = {};   // وارد کردن مبلغ شارژ
+let pendingConfigs = [];     // صف سرویس‌های در انتظار کانفیگ/QR برای ادمین
+
+// -----------------------------
+// /start
+// -----------------------------
+bot.onText(/\/start/, async (msg) => {
+  const uid = msg.from.id;
+  const u = getUser(uid);
+  u.username = msg.from.username || u.username;
+  saveDB();
+
+  if (!(await isMember(uid))) {
+    bot.sendMessage(
+      uid,
+      "سلام به آزاد تونل 🏔️\n\nبرای استفاده از ربات باید عضو کانال شوید.",
+      {
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: "📢 عضویت در کانال", url: "https://t.me/Azadtunnel1" }],
+            [{ text: "✅ تایید عضویت", callback_data: "check" }]
+          ]
+        }
+      }
+    );
+  } else {
+    bot.sendMessage(uid, "به آزاد تونل خوش آمدید 🏔️", {
+      reply_markup: { ...mainKeyboard }
+    });
+    if (uid === ADMIN_ID) {
+      bot.sendMessage(
+        uid,
+        "📊 برای مدیریت سرویس‌های در انتظار، از دستور /panel استفاده کن.",
+        { reply_markup: { ...mainKeyboard } }
+      );
+    }
+  }
+});
+
+// -----------------------------
+// داشبورد ادمین
+// -----------------------------
+bot.onText(/\/panel/, (msg) => {
+  const uid = msg.from.id;
+  if (uid !== ADMIN_ID) return;
+
+  if (!pendingConfigs.length) {
+    bot.sendMessage(uid, "📊 هیچ سرویس در صف انتظار برای ارسال کانفیگ و QR نیست.", {
+      reply_markup: { ...mainKeyboard }
+    });
     return;
   }
 
-  const lastService = tu.services[tu.services.length - 1];
-  waitingConfig[msg.from.id] = { target: targetUser, serviceId: lastService.id, mode: "qr" };
+  const rows = pendingConfigs.map((item, index) => {
+    const u = getUser(item.userId);
+    return [{
+      text: `👤 ${item.userId} | ${item.serviceName} (${item.serviceSize})`,
+      callback_data: `cfgsel_${index}`
+    }];
+  });
 
-  bot.sendMessage(msg.chat.id, "🔳 لطفاً عکس QR این سرویس را ارسال کنید.");
+  bot.sendMessage(uid, "📊 سرویس‌های در صف انتظار:", {
+    reply_markup: { inline_keyboard: rows }
+  });
 });
+
+// -----------------------------
+// پیام‌های معمولی
+// -----------------------------
+bot.on("message", (msg) => {
+  const uid = msg.from.id;
+  const text = msg.text;
+  const u = getUser(uid);
+  u.username = msg.from.username || u.username;
+  saveDB();
+
+  if (!text) return;
+
+  // ادمین در حالت انتظار لینک/کانفیگ برای سرویس (فقط یک لینک اشتراک/کانفیگ)
+  if (waitingConfig[uid] && waitingConfig[uid].mode === "config") {
+    const { target, serviceId, stage } = waitingConfig[uid];
+    const tu = getUser(target);
+    const svc = tu.services.find(s => s.id === serviceId);
+    if (!svc) {
+      waitingConfig[uid] = null;
+      return;
+    }
+
+    if (stage === "link") {
+      svc.subLink = text; // همین لینک، لینک اشتراک/کانفیگ است
+      waitingConfig[uid].stage = "qr";
+      saveDB();
+      bot.sendMessage(uid, "🔗 لینک اشتراک/کانفیگ ثبت شد. حالا عکس QR را ارسال کنید.");
+      return;
+    }
+  }
+
+  // وارد کردن مبلغ شارژ کیف پول
+  if (walletTopupState[uid] && walletTopupState[uid].step === "amount") {
+    const amount = parseInt(text.replace(/\D/g, ""), 10);
+    if (isNaN(amount) || amount < 20000 || amount > 100000000) {
+      bot.sendMessage(
+        uid,
+        "❌ مبلغ نامعتبر است.\nحداقل ۲۰,۰۰۰ و حداکثر ۱۰۰,۰۰۰,۰۰۰ تومان.\nلطفاً دوباره مبلغ را به تومان وارد کنید.",
+        { reply_markup: { ...mainKeyboard } }
+      );
+      return;
+    }
+    walletTopupState[uid].amount = amount;
+    walletTopupState[uid].step = "photo";
+    bot.sendMessage(
+      uid,
+      `✅ مبلغ ${amount} تومان ثبت شد.\nحالا لطفاً عکس فیش واریزی را ارسال کنید.`,
+      { reply_markup: { ...mainKeyboard } }
+    );
+    return;
+  }
+
+  // منوی خرید سرویس
+  if (text === "🛒 خرید سرویس") {
+    bot.sendMessage(uid, "🌐 لطفاً نوع تعرفه را انتخاب کنید:", {
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: "🌤 تعرفه‌های سبک", callback_data: "light" }],
+          [{ text: "🌋 تعرفه‌های سنگین", callback_data: "heavy" }]
+        ]
+      }
+    });
+    return;
+  }
+
+  // سرویس‌های من
+  if (text === "📂 سرویس‌های من") {
+    if (!u.services.length) {
+      bot.sendMessage(uid, "📂 هیچ سرویسی ثبت نشده است.", {
+        reply_markup: { ...mainKeyboard }
+      });
+    } else {
+      const buttons = u.services.map(s => {
+        return [{ text: `🔐 ${s.name} (${s.size})`, callback_data: `mysvc_${s.id}` }];
+      });
+      bot.sendMessage(uid, "📂 سرویس‌های شما:", {
+        reply_markup: { inline_keyboard: buttons }
+      });
+    }
+    return;
+  }
+
+  // حساب کاربری
+  if (text === "👤 حساب کاربری") {
+    bot.sendMessage(
+      uid,
+      `👤 حساب کاربری:\n` +
+      `آیدی عددی: ${uid}\n` +
+      `نام کاربری: ${u.username ? "@" + u.username : "ثبت نشده"}\n` +
+      `موجودی کیف پول: ${u.balance} تومان`,
+      { reply_markup: { ...mainKeyboard } }
+    );
+    return;
+  }
+
+  // کیف پول
+  if (text === "💳 کیف پول") {
+    bot.sendMessage(
+      uid,
+      `💳 کیف پول شما:\nموجودی فعلی: ${u.balance} تومان`,
+      {
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: "➕ افزایش موجودی", callback_data: "wallet_add" }]
+          ]
+        }
+      }
+    );
+    return;
+  }
+
+  // راهنمایی
+  if (text === "🧭 راهنمایی") {
+    bot.sendMessage(
+      uid,
+      "🧭 راهنمای اتصال:\n\n" +
+      "برای اتصال:\n" +
+      "لینک سابسکریبشن را کپی کنید\n" +
+      "و لینک اشتراک را در اپ‌های زیر کپی کنید:\n\n" +
+      "• V2Box\n" +
+      "• Streisand\n" +
+      "• Happ Tunnel\n" +
+      "and…\n\n" +
+      "و همچنین می‌توانید لینک‌های تکی را از طریق لینک اشتراک کپی کنید و در اپلیکیشن‌های زیر کپی کنید:\n\n" +
+      "• NPV Tunnel\n" +
+      "• V2RayNG\n" +
+      "and…",
+      { reply_markup: { ...mainKeyboard } }
+    );
+    return;
+  }
+
+  // پشتیبانی
+  if (text === "🆘 پشتیبانی") {
+    bot.sendMessage(uid, "🆘 پشتیبانی:\n@Azadtunnel1", {
+      reply_markup: { ...mainKeyboard }
+    });
+    return;
+  }
+});
+
+// -----------------------------
+// کال‌بک‌ها
+// -----------------------------
+bot.on("callback_query", async (c) => {
+  const uid = c.from.id;
+  const u = getUser(uid);
+
+  // تایید عضویت
+  if (c.data === "check") {
+    if (await isMember(uid)) {
+      bot.editMessageText("✅ عضویت شما در کانال تایید شد.\nمنوی اصلی فعال شد.", {
+        chat_id: uid,
+        message_id: c.message.message_id,
+        reply_markup: { ...mainKeyboard }
+      });
+    } else {
+      bot.answerCallbackQuery(c.id, { text: "❌ هنوز عضو کانال نیستی." });
+    }
+    return;
+  }
+
+  // افزایش موجودی کیف پول
+  if (c.data === "wallet_add" || c.data === "wallet_add_from_insufficient") {
+    walletTopupState[uid] = { step: "amount", amount: null };
+    bot.editMessageText(
+      "💳 افزایش موجودی کیف پول\n\n" +
+      "حداقل مبلغ: ۲۰,۰۰۰ تومان\n" +
+      "حداکثر مبلغ: ۱۰۰,۰۰۰,۰۰۰ تومان\n\n" +
+      `💳 شماره کارت:\n${CARD_NUMBER}\nبه نام کریمی\n\n` +
+      "🔢 مبلغ مورد نظر را به تومان وارد کنید:",
+      { chat_id: uid, message_id: c.message.message_id }
+    );
+    return;
+  }
+
+  // تعرفه‌های سنگین
+  if (c.data === "heavy") {
+    bot.editMessageText("🌋 تعرفه‌های سنگین:", {
+      chat_id: uid,
+      message_id: c.message.message_id,
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: "200GB / 300K", callback_data: "h_200_300000" }],
+          [{ text: "300GB / 400K", callback_data: "h_300_400000" }],
+          [{ text: "500GB / 600K", callback_data: "h_500_600000" }]
+        ]
+      }
+    });
+    return;
+  }
+
+  // انتخاب سنگین‌ها
+  if (c.data.startsWith("h_")) {
+    const [, size, price] = c.data.split("_");
+    const descName = `سرویس سنگین`;
+    const descSize = `${size}GB / ۲ ماهه`;
+    u.pendingService = { name: descName, size: descSize, price: Number(price) };
+    saveDB();
+
+    bot.editMessageText(
+      `📦 سرویس انتخابی:\n\n` +
+      `📛 نام سرویس: ${descName}\n` +
+      `📏 حجم: ${descSize}\n` +
+      `💰 قیمت: ${price} تومان
