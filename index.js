@@ -25,6 +25,11 @@ const mainKeyboard = {
   }
 };
 
+// همیشه منو را فعال نگه می‌دارد
+function ensureKeyboard(uid) {
+  bot.sendMessage(uid, "منوی اصلی آزاد تونل 🏔️", mainKeyboard);
+}
+
 // -----------------------------
 // دیتابیس ساده کاربران
 // -----------------------------
@@ -75,7 +80,7 @@ bot.onText(/\/start/, async (msg) => {
       }
     );
   } else {
-    bot.sendMessage(uid, "منوی اصلی آزاد تونل 🏔️", mainKeyboard);
+    ensureKeyboard(uid);
   }
 });
 
@@ -86,6 +91,11 @@ bot.on("message", (msg) => {
   const uid = msg.from.id;
   const text = msg.text;
   const u = getUser(uid);
+
+  // منوی ثابت همیشه فعال باشد
+  if (msg.chat.type === "private") {
+    ensureKeyboard(uid);
+  }
 
   if (!text) return;
 
@@ -223,7 +233,7 @@ bot.on("callback_query", async (c) => {
         chat_id: uid,
         message_id: c.message.message_id
       });
-      bot.sendMessage(uid, "منوی اصلی آزاد تونل 🏔️", mainKeyboard);
+      ensureKeyboard(uid);
     } else {
       bot.answerCallbackQuery(c.id, { text: "❌ هنوز عضو کانال نیستی." });
     }
