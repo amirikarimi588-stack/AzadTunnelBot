@@ -1,1 +1,16 @@
 
+{
+  "name": "azadtunnelbot",
+  "version": "1.0.0",
+  "description": "Azad Tunnel Telegram Bot",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "engines": {
+    "node": "20.x"
+  },
+  "dependencies": {
+    "node-telegram-bot-api": "^0.66.0"
+  }
+}
