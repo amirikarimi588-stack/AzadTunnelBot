@@ -63,8 +63,8 @@ async function isMember(uid) {
   }
 }
 
-// کیبورد اصلی
-const mainKeyboard = {
+// کیبورد اصلی برای کاربر معمولی
+const userKeyboard = {
   keyboard: [
     ["🛒 خرید سرویس", "📂 سرویس‌های من"],
     ["👤 حساب کاربری", "💳 کیف پول"],
@@ -73,6 +73,22 @@ const mainKeyboard = {
   resize_keyboard: true,
   one_time_keyboard: false
 };
+
+// کیبورد اصلی برای ادمین (با دکمهٔ کانفیگ‌های در انتظار)
+const adminKeyboard = {
+  keyboard: [
+    ["🛒 خرید سرویس", "📂 سرویس‌های من"],
+    ["👤 حساب کاربری", "💳 کیف پول"],
+    ["🧭 راهنمایی", "🆘 پشتیبانی"],
+    ["🔧 کانفیگ‌های در انتظار"]
+  ],
+  resize_keyboard: true,
+  one_time_keyboard: false
+};
+
+function getMainKeyboard(uid) {
+  return uid === ADMIN_ID ? adminKeyboard : userKeyboard;
+}
 
 // وضعیت‌ها
 let waitingConfig = {};      // برای لینک و QR
@@ -102,27 +118,27 @@ bot.onText(/\/start/, async (msg) => {
     );
   } else {
     bot.sendMessage(uid, "به آزاد تونل خوش آمدید 🏔️", {
-      reply_markup: mainKeyboard
+      reply_markup: getMainKeyboard(uid)
     });
 
     if (uid === ADMIN_ID) {
       bot.sendMessage(
         uid,
-        "📊 برای مدیریت سرویس‌های در انتظار، از دستور /panel استفاده کن.",
-        { reply_markup: mainKeyboard }
+        "📊 برای مدیریت سرویس‌های در انتظار، می‌تونی از دکمهٔ «🔧 کانفیگ‌های در انتظار» یا دستور /panel استفاده کنی.",
+        { reply_markup: getMainKeyboard(uid) }
       );
     }
   }
 });
 
-// داشبورد ادمین
+// داشبورد ادمین با دستور /panel
 bot.onText(/\/panel/, (msg) => {
   const uid = msg.from.id;
   if (uid !== ADMIN_ID) return;
 
   if (!pendingConfigs.length) {
     bot.sendMessage(uid, "📊 هیچ سرویس در صف انتظار برای ارسال کانفیگ و QR نیست.", {
-      reply_markup: mainKeyboard
+      reply_markup: getMainKeyboard(uid)
     });
     return;
   }
@@ -164,7 +180,7 @@ bot.on("message", (msg) => {
       waitingConfig[uid].stage = "qr";
       saveDB();
       bot.sendMessage(uid, "🔗 لینک اشتراک/کانفیگ ثبت شد. حالا عکس QR را ارسال کنید.", {
-        reply_markup: mainKeyboard
+        reply_markup: getMainKeyboard(uid)
       });
       return;
     }
@@ -177,7 +193,7 @@ bot.on("message", (msg) => {
       bot.sendMessage(
         uid,
         "❌ مبلغ نامعتبر است.\nحداقل ۲۰,۰۰۰ و حداکثر ۱۰۰,۰۰۰,۰۰۰ تومان.\nلطفاً دوباره مبلغ را به تومان وارد کنید.",
-        { reply_markup: mainKeyboard }
+        { reply_markup: getMainKeyboard(uid) }
       );
       return;
     }
@@ -186,7 +202,7 @@ bot.on("message", (msg) => {
     bot.sendMessage(
       uid,
       `✅ مبلغ ${amount} تومان ثبت شد.\nحالا لطفاً عکس فیش واریزی را ارسال کنید.`,
-      { reply_markup: mainKeyboard }
+      { reply_markup: getMainKeyboard(uid) }
     );
     return;
   }
@@ -208,7 +224,7 @@ bot.on("message", (msg) => {
   if (text === "📂 سرویس‌های من") {
     if (!u.services.length) {
       bot.sendMessage(uid, "📂 هیچ سرویسی ثبت نشده است.", {
-        reply_markup: mainKeyboard
+        reply_markup: getMainKeyboard(uid)
       });
     } else {
       const buttons = u.services.map(s => {
@@ -229,7 +245,7 @@ bot.on("message", (msg) => {
       `آیدی عددی: ${uid}\n` +
       `نام کاربری: ${u.username ? "@" + u.username : "ثبت نشده"}\n` +
       `موجودی کیف پول: ${u.balance} تومان`,
-      { reply_markup: mainKeyboard }
+      { reply_markup: getMainKeyboard(uid) }
     );
     return;
   }
@@ -258,7 +274,7 @@ bot.on("message", (msg) => {
       "لینک اشتراک را کپی کنید و در اپ‌های زیر وارد کنید:\n\n" +
       "• V2Box\n• Streisand\n• Happ Tunnel\n• NPV Tunnel\n• V2RayNG\n\n" +
       "برای لینک‌های تکی، روی لینک اشتراک کلیک کنید.",
-      { reply_markup: mainKeyboard }
+      { reply_markup: getMainKeyboard(uid) }
     );
     return;
   }
@@ -266,7 +282,29 @@ bot.on("message", (msg) => {
   // پشتیبانی
   if (text === "🆘 پشتیبانی") {
     bot.sendMessage(uid, "🆘 پشتیبانی:\n@Azadtunnel1", {
-      reply_markup: mainKeyboard
+      reply_markup: getMainKeyboard(uid)
+    });
+    return;
+  }
+
+  // دکمهٔ منوی ادمین: کانفیگ‌های در انتظار
+  if (text === "🔧 کانفیگ‌های در انتظار" && uid === ADMIN_ID) {
+    if (!pendingConfigs.length) {
+      bot.sendMessage(uid, "📊 هیچ سرویس در صف انتظار برای ارسال کانفیگ و QR نیست.", {
+        reply_markup: getMainKeyboard(uid)
+      });
+      return;
+    }
+
+    const rows = pendingConfigs.map((item, index) => {
+      return [{
+        text: `👤 ${item.userId} | ${item.serviceName} (${item.serviceSize})`,
+        callback_data: `cfgsel_${index}`
+      }];
+    });
+
+    bot.sendMessage(uid, "📊 سرویس‌های در صف انتظار:", {
+      reply_markup: { inline_keyboard: rows }
     });
     return;
   }
@@ -284,7 +322,7 @@ bot.on("callback_query", async (c) => {
         chat_id: uid,
         message_id: c.message.message_id
       });
-      bot.sendMessage(uid, "منوی اصلی:", { reply_markup: mainKeyboard });
+      bot.sendMessage(uid, "منوی اصلی:", { reply_markup: getMainKeyboard(uid) });
     } else {
       bot.answerCallbackQuery(c.id, { text: "❌ هنوز عضو کانال نیستی." });
     }
@@ -558,12 +596,12 @@ bot.on("callback_query", async (c) => {
       `💰 مبلغ ${ps.price} تومان بابت سرویس از کیف پول شما کسر شد.\n` +
       `💼 موجودی فعلی کیف پول: ${tu.balance} تومان\n\n` +
       `لطفاً منتظر دریافت لینک و کانفیگ باشید.`,
-      { reply_markup: mainKeyboard }
+      { reply_markup: getMainKeyboard(targetUser) }
     );
 
     bot.sendMessage(
       ADMIN_ID,
-      `✔ پرداخت از کیف پول کاربر ${targetUser} تایید شد.\nاین سرویس در صف داشبورد قرار گرفت. برای ارسال لینک و QR از /panel استفاده کن.`
+      `✔ پرداخت از کیف پول کاربر ${targetUser} تایید شد.\nاین سرویس در صف داشبورد قرار گرفت. برای ارسال لینک و QR از دکمهٔ «🔧 کانفیگ‌های در انتظار» یا /panel استفاده کن.`
     );
 
     pendingWalletPay[targetUser] = null;
@@ -685,7 +723,11 @@ bot.on("callback_query", async (c) => {
     });
 
     if (svc.qrFileId) {
-      bot.sendPhoto(uid, svc.qrFileId, { caption: "🔳 QR سرویس شما" });
+      bot.sendPhoto(uid, svc.qrFileId, {
+        caption: svc.subLink
+          ? `🔳 QR سرویس شما\n\n🔗 لینک اشتراک:\n${svc.subLink}`
+          : "🔳 QR سرویس شما"
+      });
     }
 
     bot.answerCallbackQuery(c.id);
@@ -697,7 +739,7 @@ bot.on("callback_query", async (c) => {
     bot.sendMessage(
       uid,
       "برای کپی کردن لینک های تکی روی لینک سابسکریپشن خود کلیک کنید و لینک های تکی را کپی کنید",
-      { reply_markup: mainKeyboard }
+      { reply_markup: getMainKeyboard(uid) }
     );
     bot.answerCallbackQuery(c.id, { text: "متن راهنمای لینک‌های تکی ارسال شد." });
     return;
@@ -740,12 +782,12 @@ bot.on("callback_query", async (c) => {
     bot.sendMessage(
       targetUser,
       "✅ فیش شما تایید شد.\nسرویس شما ثبت شد.\nلطفاً منتظر دریافت لینک و QR باشید.",
-      { reply_markup: mainKeyboard }
+      { reply_markup: getMainKeyboard(targetUser) }
     );
 
     bot.sendMessage(
       ADMIN_ID,
-      `✔ سرویس کارت به کارت کاربر ${targetUser} تایید شد.\nاین سرویس در صف داشبورد قرار گرفت. برای ارسال لینک و QR از /panel استفاده کن.`
+      `✔ سرویس کارت به کارت کاربر ${targetUser} تایید شد.\nاین سرویس در صف داشبورد قرار گرفت. برای ارسال لینک و QR از دکمهٔ «🔧 کانفیگ‌های در انتظار» یا /panel استفاده کن.`
     );
 
     bot.answerCallbackQuery(c.id, { text: "سرویس به صف کانفیگ اضافه شد." });
@@ -758,7 +800,7 @@ bot.on("photo", (msg) => {
   const uid = msg.from.id;
   const u = getUser(uid);
 
-  // QR برای سرویس (ادمین)
+  // QR برای سرویس (ادمین) → ارسال QR + کانفیگ در یک پیام
   if (waitingConfig[uid] && waitingConfig[uid].mode === "config" && waitingConfig[uid].stage === "qr") {
     const { target, serviceId } = waitingConfig[uid];
     const tu = getUser(target);
@@ -767,22 +809,22 @@ bot.on("photo", (msg) => {
       svc.qrFileId = msg.photo[msg.photo.length - 1].file_id;
       saveDB();
 
-      let text =
-        `✅ لینک شما آماده‌ست\n\n` +
+      const caption =
+        `🔳 QR سرویس شما\n\n` +
         `📛 نام سرویس: ${svc.name}\n` +
         `📏 حجم: ${svc.size}\n` +
         `💰 قیمت: ${svc.price} تومان\n` +
-        `👤 نام کاربری شما: ${tu.username ? "@" + tu.username : "ثبت نشده"}\n\n`;
+        `👤 نام کاربری شما: ${tu.username ? "@" + tu.username : "ثبت نشده"}\n\n` +
+        (svc.subLink ? `🔗 لینک اشتراک/کانفیگ:\n${svc.subLink}\n\n` : "") +
+        "لطفاً لینک را در اپ‌های معرفی‌شده در بخش راهنمایی وارد کنید.";
 
-      if (svc.subLink) text += `🔗 لینک اشتراک/کانفیگ:\n${svc.subLink}\n\n`;
-
-      text += "لطفاً لینک را در اپ‌های معرفی‌شده در بخش راهنمایی وارد کنید.";
-
-      bot.sendMessage(target, text, { reply_markup: mainKeyboard });
-      bot.sendPhoto(target, svc.qrFileId, { caption: "🔳 QR سرویس شما" });
+      bot.sendPhoto(target, svc.qrFileId, {
+        caption,
+        reply_markup: getMainKeyboard(target)
+      });
 
       bot.sendMessage(uid, "✅ کانفیگ و QR برای مخاطب ارسال شد.", {
-        reply_markup: mainKeyboard
+        reply_markup: getMainKeyboard(uid)
       });
     }
     waitingConfig[uid] = null;
@@ -793,7 +835,7 @@ bot.on("photo", (msg) => {
   if (walletTopupState[uid] && walletTopupState[uid].step === "photo") {
     const amount = walletTopupState[uid].amount || 0;
     bot.sendMessage(uid, "📸 فیش شارژ کیف پول دریافت شد. منتظر تایید باشید.", {
-      reply_markup: mainKeyboard
+      reply_markup: getMainKeyboard(uid)
     });
 
     bot.sendPhoto(ADMIN_ID, msg.photo[msg.photo.length - 1].file_id, {
@@ -815,7 +857,7 @@ bot.on("photo", (msg) => {
   // فیش سرویس کارت به کارت
   if (u.pendingService) {
     bot.sendMessage(uid, "📸 فیش سرویس دریافت شد. منتظر تایید باشید.", {
-      reply_markup: mainKeyboard
+      reply_markup: getMainKeyboard(uid)
     });
 
     bot.sendPhoto(ADMIN_ID, msg.photo[msg.photo.length - 1].file_id, {
@@ -838,6 +880,6 @@ bot.on("photo", (msg) => {
   bot.sendMessage(
     uid,
     "❌ هیچ سفارشی یا درخواست شارژی ثبت نشده.\nابتدا از منوی «🛒 خرید سرویس» یا «💳 کیف پول» اقدام کنید.",
-    { reply_markup: mainKeyboard }
+    { reply_markup: getMainKeyboard(uid) }
   );
 });
