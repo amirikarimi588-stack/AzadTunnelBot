@@ -6,12 +6,30 @@ const TelegramBot = require("node-telegram-bot-api");
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const MAIN_CHANNEL = "@Azadtunnel1";       // کانال اصلی
 const ADMIN_ID = 8571263967;               // آیدی عددی تو
-const CARD_NUMBER = "6219861435903868";    // شماره کارت
+const CARD_NUMBER = "6219861435903868";    // شماره کارت (به نام کریمی)
 
 const bot = new TelegramBot(BOT_TOKEN, { polling: true });
 
+// -----------------------------
+// کیبورد ثابت پایین صفحه
+// -----------------------------
+const mainKeyboard = {
+  reply_markup: {
+    keyboard: [
+      ["🛒 خرید سرویس", "📂 سرویس‌های من"],
+      ["👤 حساب کاربری", "💳 کیف پول"],
+      ["🆘 پشتیبانی"]
+    ],
+    resize_keyboard: true,
+    one_time_keyboard: false
+  }
+};
+
+// -----------------------------
 // دیتابیس ساده
+// -----------------------------
 let users = {};
+let waitingConfig = {}; // ادمین → کاربر هدف برای ارسال کانفیگ
 
 function getUser(uid) {
   if (!users[uid]) {
@@ -20,7 +38,9 @@ function getUser(uid) {
   return users[uid];
 }
 
+// -----------------------------
 // چک عضویت کانال
+// -----------------------------
 async function isMember(uid) {
   try {
     const m = await bot.getChatMember(MAIN_CHANNEL, uid);
@@ -52,50 +72,112 @@ bot.onText(/\/start/, async (msg) => {
       opts
     );
   } else {
-    sendMenu(uid);
+    bot.sendMessage(uid, "منوی اصلی آزاد تونل 🏔️", mainKeyboard);
   }
 });
 
 // -----------------------------
-// منوی اصلی
+// منوی اصلی (با دکمه‌های ثابت)
 // -----------------------------
-function sendMenu(uid) {
-  bot.sendMessage(uid, "منوی اصلی آزاد تونل 🏔️", {
-    reply_markup: {
-      inline_keyboard: [
-        [{ text: "🛒 خرید سرویس", callback_data: "buy" }],
-        [{ text: "👤 حساب کاربری", callback_data: "acc" }],
-        [{ text: "📂 سرویس‌های من", callback_data: "my" }],
-        [{ text: "💳 کیف پول", callback_data: "wallet" }],
-        [{ text: "🆘 پشتیبانی", callback_data: "sup" }],
-      ],
-    },
-  });
-}
+bot.on("message", (msg) => {
+  const uid = msg.from.id;
+  const text = msg.text;
+  const u = getUser(uid);
+
+  if (!text) return;
+
+  // اگر ادمین در حالت انتظار کانفیگ است، متن را به عنوان کانفیگ بفرست
+  if (waitingConfig[uid]) {
+    const target = waitingConfig[uid];
+
+    bot.sendMessage(
+      target,
+      `✅ فیش تایید شد.\nاین هم کانفیگ شما:\n\n${text}`
+    );
+
+    bot.sendMessage(uid, "✔️ کانفیگ برای کاربر ارسال شد.");
+    delete waitingConfig[uid];
+    return;
+  }
+
+  if (text === "🛒 خرید سرویس") {
+    bot.sendMessage(uid, "🌐 لطفاً نوع تعرفه را انتخاب کنید:", {
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: "🌤 تعرفه‌های سبک", callback_data: "light" }],
+          [{ text: "🌋 تعرفه‌های سنگین", callback_data: "heavy" }],
+        ],
+      },
+    });
+  }
+
+  if (text === "📂 سرویس‌های من") {
+    if (!u.services.length) {
+      bot.sendMessage(uid, "📂 هیچ سرویسی ثبت نشده است.");
+    } else {
+      const txt =
+        "📂 سرویس‌های شما:\n" +
+        u.services.map((s) => `- ${s.desc}`).join("\n");
+      bot.sendMessage(uid, txt);
+    }
+  }
+
+  if (text === "👤 حساب کاربری") {
+    bot.sendMessage(uid, `👤 حساب کاربری:\nآیدی عددی: ${uid}`);
+  }
+
+  if (text === "💳 کیف پول") {
+    bot.sendMessage(uid, "💳 کیف پول: 0 تومان\n(در حال حاضر کیف پول فعال نیست.)");
+  }
+
+  if (text === "🆘 پشتیبانی") {
+    bot.sendMessage(uid, "🆘 پشتیبانی:\nبرای ارتباط با پشتیبانی به این آیدی پیام دهید:\n@Azadtunnel1");
+  }
+});
 
 // -----------------------------
-// هندلر دکمه‌ها
+// هندلر دکمه‌های اینلاین
 // -----------------------------
 bot.on("callback_query", async (c) => {
   const uid = c.from.id;
   const u = getUser(uid);
 
+  // دکمه مخصوص ارسال کانفیگ (فقط برای ادمین)
+  if (c.data.startsWith("sendcfg_")) {
+    if (uid !== ADMIN_ID) {
+      bot.answerCallbackQuery(c.id, { text: "این دکمه فقط برای ادمین است." });
+      return;
+    }
+
+    const targetUser = c.data.split("_")[1];
+    waitingConfig[uid] = targetUser;
+
+    bot.sendMessage(
+      uid,
+      "🔧 لطفاً کانفیگ یا عکس QR را ارسال کنید.\nپس از ارسال، ربات آن را برای کاربر ارسال می‌کند."
+    );
+
+    bot.answerCallbackQuery(c.id, { text: "در انتظار کانفیگ..." });
+    return;
+  }
+
   // تایید عضویت
   if (c.data === "check") {
     if (await isMember(uid)) {
-      bot.editMessageText("عضویت تایید شد 👌", {
+      bot.editMessageText("✅ عضویت شما در کانال تایید شد.\n\nمنوی اصلی برای شما فعال شد. 🌟", {
         chat_id: uid,
         message_id: c.message.message_id,
       });
-      sendMenu(uid);
+      bot.sendMessage(uid, "منوی اصلی آزاد تونل 🏔️", mainKeyboard);
     } else {
-      bot.answerCallbackQuery(c.id, { text: "❌ هنوز عضو کانال نیستی" });
+      bot.answerCallbackQuery(c.id, { text: "❌ هنوز عضو کانال نیستی. لطفاً اول عضو کانال شو." });
     }
+    return;
   }
 
   // خرید سرویس
   if (c.data === "buy") {
-    bot.editMessageText("نوع تعرفه را انتخاب کنید:", {
+    bot.editMessageText("🌐 لطفاً نوع تعرفه را انتخاب کنید:", {
       chat_id: uid,
       message_id: c.message.message_id,
       reply_markup: {
@@ -105,6 +187,7 @@ bot.on("callback_query", async (c) => {
         ],
       },
     });
+    return;
   }
 
   // تعرفه‌های سنگین
@@ -120,6 +203,7 @@ bot.on("callback_query", async (c) => {
         ],
       },
     });
+    return;
   }
 
   // انتخاب سنگین‌ها
@@ -134,14 +218,25 @@ bot.on("callback_query", async (c) => {
     u.pending = { desc, price };
 
     bot.editMessageText(
-      `سرویس انتخابی:\n${desc}\nقیمت: ${price} تومان\n\nشماره کارت:\n${CARD_NUMBER}\n\nبعد از واریز، عکس فیش را ارسال کنید.`,
-      { chat_id: uid, message_id: c.message.message_id }
+      `📄 *فیش شما آماده است*\n\n` +
+      `🛒 *نوع سرویس:* ${desc}\n` +
+      `💰 *قیمت:* ${price} تومان\n\n` +
+      `💳 *شماره کارت:* \`${CARD_NUMBER}\`\n` +
+      `👤 *به نام:* کریمی\n\n` +
+      `📸 لطفاً بعد از واریز، *عکس فیش* را ارسال کنید تا تایید شود.\n\n` +
+      `✅ با تشکر از اعتماد شما 🌟`,
+      {
+        chat_id: uid,
+        message_id: c.message.message_id,
+        parse_mode: "Markdown"
+      }
     );
+    return;
   }
 
   // تعرفه‌های سبک
   if (c.data === "light") {
-    bot.editMessageText("مدت زمان:", {
+    bot.editMessageText("🌤 لطفاً مدت زمان سرویس را انتخاب کنید:", {
       chat_id: uid,
       message_id: c.message.message_id,
       reply_markup: {
@@ -152,6 +247,7 @@ bot.on("callback_query", async (c) => {
         ],
       },
     });
+    return;
   }
 
   // سبک → انتخاب حجم
@@ -164,15 +260,16 @@ bot.on("callback_query", async (c) => {
 
     const opts = {
       inline_keyboard: Object.entries(prices[c.data]).map(([g, p]) => [
-        { text: `${g}GB / ${p}`, callback_data: `${c.data}_${g}` },
+        { text: `${g}GB / ${p} تومان`, callback_data: `${c.data}_${g}` },
       ]),
     };
 
-    bot.editMessageText("انتخاب حجم:", {
+    bot.editMessageText("📦 لطفاً حجم سرویس را انتخاب کنید:", {
       chat_id: uid,
       message_id: c.message.message_id,
       reply_markup: opts,
     });
+    return;
   }
 
   // سبک → انتخاب نهایی
@@ -187,24 +284,35 @@ bot.on("callback_query", async (c) => {
 
     const price = priceMap[period][size];
     const desc = `${size}GB / ${period}`;
-
     u.pending = { desc, price };
 
     bot.editMessageText(
-      `سرویس انتخابی:\n${desc}\nقیمت: ${price} تومان\n\nشماره کارت:\n${CARD_NUMBER}\n\nبعد از واریز، عکس فیش را ارسال کنید.`,
-      { chat_id: uid, message_id: c.message.message_id }
+      `📄 *فیش شما آماده است*\n\n` +
+      `🛒 *نوع سرویس:* ${desc}\n` +
+      `💰 *قیمت:* ${price} تومان\n\n` +
+      `💳 *شماره کارت:* \`${CARD_NUMBER}\`\n` +
+      `👤 *به نام:* کریمی\n\n` +
+      `📸 لطفاً بعد از واریز، *عکس فیش* را ارسال کنید تا تایید شود.\n\n` +
+      `✨ از انتخاب شما سپاسگزاریم 🌟`,
+      {
+        chat_id: uid,
+        message_id: c.message.message_id,
+        parse_mode: "Markdown"
+      }
     );
+    return;
   }
 
-  // حساب کاربری
+  // حساب کاربری (اینلاین)
   if (c.data === "acc") {
     bot.editMessageText(
       `👤 حساب کاربری:\nآیدی عددی: ${uid}\nتعداد سرویس‌ها: ${u.services.length}`,
       { chat_id: uid, message_id: c.message.message_id }
     );
+    return;
   }
 
-  // سرویس‌های من
+  // سرویس‌های من (اینلاین)
   if (c.data === "my") {
     if (!u.services.length) {
       bot.editMessageText("📂 هیچ سرویسی ندارید.", {
@@ -221,56 +329,253 @@ bot.on("callback_query", async (c) => {
         message_id: c.message.message_id,
       });
     }
+    return;
   }
 
-  // کیف پول
+  // کیف پول (اینلاین)
   if (c.data === "wallet") {
     bot.editMessageText("💳 کیف پول: 0 تومان", {
       chat_id: uid,
       message_id: c.message.message_id,
     });
+    return;
   }
 
-  // پشتیبانی
+  // پشتیبانی (اینلاین)
   if (c.data === "sup") {
     bot.editMessageText("🆘 پشتیبانی:\n@Azadtunnel1", {
       chat_id: uid,
       message_id: c.message.message_id,
     });
+    return;
   }
 });
 
 // -----------------------------
-// دریافت عکس فیش
+// دریافت عکس فیش (کاربر) و عکس QR (ادمین)
 // -----------------------------
 bot.on("photo", (msg) => {
   const uid = msg.from.id;
-  const u = getUser(uid);
 
-  if (!u.pending) {
-    bot.sendMessage(uid, "سفارشی ثبت نشده.");
+  // اگر ادمین در حالت انتظار کانفیگ است و عکس فرستاد → عکس را برای کاربر بفرست
+  if (waitingConfig[uid]) {
+    const target = waitingConfig[uid];
+
+    bot.sendPhoto(
+      target,
+      msg.photo[msg.photo.length - 1].file_id,
+      { caption: "🔐 کانفیگ شما آماده است" }
+    );
+
+    bot.sendMessage(uid, "✔️ عکس QR برای کاربر ارسال شد.");
+    delete waitingConfig[uid];
     return;
   }
 
-  bot.sendMessage(uid, "فیش دریافت شد. منتظر تایید باشید.");
+  const u = getUser(uid);
+
+  if (!u.pending) {
+    bot.sendMessage(uid, "❌ سفارشی ثبت نشده.\nلطفاً ابتدا از منوی «🛒 خرید سرویس» یک سرویس انتخاب کنید.");
+    return;
+  }
+
+  bot.sendMessage(uid, "📸 فیش دریافت شد. منتظر تایید باشید ✅");
 
   bot.sendPhoto(ADMIN_ID, msg.photo[msg.photo.length - 1].file_id, {
-    caption: `فیش جدید:\nکاربر: ${uid}\nسرویس: ${u.pending.desc}\nقیمت: ${u.pending.price}`,
+    caption:
+      `📥 فیش جدید:\n` +
+      `👤 کاربر: ${uid}\n` +
+      `🛒 سرویس: ${u.pending.desc}\n` +
+      `💰 قیمت: ${u.pending.price} تومان`,
+    reply_markup: {
+      inline_keyboard: [
+        [{ text: "✔️ ارسال کانفیگ", callback_data: `sendcfg_${uid}` }]
+      ]
+    }
   });
 });
 
 // -----------------------------
-// دستور ادمین برای ارسال کانفیگ
+// دستور ادمین برای ارسال کانفیگ با متن (اختیاری)
 // -----------------------------
 bot.onText(/\/sendconfig (.+) (.+)/, (msg, match) => {
   if (msg.from.id !== ADMIN_ID) {
-    bot.sendMessage(msg.chat.id, "اجازه نداری.");
+    bot.sendMessage(msg.chat.id, "❌ اجازه نداری از این دستور استفاده کنی.");
     return;
   }
 
   const uid = match[1];
   const cfg = match[2];
 
-  bot.sendMessage(uid, `فیش تایید شد.\nاین هم کانفیگ شما:\n\n${cfg}`);
-  bot.sendMessage(msg.chat.id, "ارسال شد.");
+  bot.sendMessage(uid, `✅ فیش تایید شد.\nاین هم کانفیگ شما:\n\n${cfg}`);
+  bot.sendMessage(msg.chat.id, "📤 کانفیگ برای کاربر ارسال شد.");
 });
+``````js
+const TelegramBot = require("node-telegram-bot-api");
+
+// -----------------------------
+// تنظیمات اصلی
+// -----------------------------
+const BOT_TOKEN = process.env.BOT_TOKEN;
+const MAIN_CHANNEL = "@Azadtunnel1";       // کانال اصلی
+const ADMIN_ID = 8571263967;               // آیدی عددی تو
+const CARD_NUMBER = "6219861435903868";    // شماره کارت (به نام کریمی)
+
+const bot = new TelegramBot(BOT_TOKEN, { polling: true });
+
+// -----------------------------
+// کیبورد ثابت پایین صفحه
+// -----------------------------
+const mainKeyboard = {
+  reply_markup: {
+    keyboard: [
+      ["🛒 خرید سرویس", "📂 سرویس‌های من"],
+      ["👤 حساب کاربری", "💳 کیف پول"],
+      ["🆘 پشتیبانی"]
+    ],
+    resize_keyboard: true,
+    one_time_keyboard: false
+  }
+};
+
+// -----------------------------
+// دیتابیس ساده
+// -----------------------------
+let users = {};
+let waitingConfig = {}; // ادمین → کاربر هدف برای ارسال کانفیگ
+
+function getUser(uid) {
+  if (!users[uid]) {
+    users[uid] = { services: [], pending: null };
+  }
+  return users[uid];
+}
+
+// -----------------------------
+// چک عضویت کانال
+// -----------------------------
+async function isMember(uid) {
+  try {
+    const m = await bot.getChatMember(MAIN_CHANNEL, uid);
+    return ["member", "administrator", "creator"].includes(m.status);
+  } catch {
+    return false;
+  }
+}
+
+// -----------------------------
+// /start
+// -----------------------------
+bot.onText(/\/start/, async (msg) => {
+  const uid = msg.from.id;
+
+  if (!(await isMember(uid))) {
+    const opts = {
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: "📢 عضویت در کانال", url: "https://t.me/Azadtunnel1" }],
+          [{ text: "✅ تایید عضویت", callback_data: "check" }],
+        ],
+      },
+    };
+
+    bot.sendMessage(
+      uid,
+      "سلام به آزاد تونل 🏔️\n\nبرای استفاده از ربات باید عضو کانال شوید.\nبعد از عضویت، روی «تایید عضویت» بزنید.",
+      opts
+    );
+  } else {
+    bot.sendMessage(uid, "منوی اصلی آزاد تونل 🏔️", mainKeyboard);
+  }
+});
+
+// -----------------------------
+// منوی اصلی (با دکمه‌های ثابت)
+// -----------------------------
+bot.on("message", (msg) => {
+  const uid = msg.from.id;
+  const text = msg.text;
+  const u = getUser(uid);
+
+  if (!text) return;
+
+  // اگر ادمین در حالت انتظار کانفیگ است، متن را به عنوان کانفیگ بفرست
+  if (waitingConfig[uid]) {
+    const target = waitingConfig[uid];
+
+    bot.sendMessage(
+      target,
+      `✅ فیش تایید شد.\nاین هم کانفیگ شما:\n\n${text}`
+    );
+
+    bot.sendMessage(uid, "✔️ کانفیگ برای کاربر ارسال شد.");
+    delete waitingConfig[uid];
+    return;
+  }
+
+  if (text === "🛒 خرید سرویس") {
+    bot.sendMessage(uid, "🌐 لطفاً نوع تعرفه را انتخاب کنید:", {
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: "🌤 تعرفه‌های سبک", callback_data: "light" }],
+          [{ text: "🌋 تعرفه‌های سنگین", callback_data: "heavy" }],
+        ],
+      },
+    });
+  }
+
+  if (text === "📂 سرویس‌های من") {
+    if (!u.services.length) {
+      bot.sendMessage(uid, "📂 هیچ سرویسی ثبت نشده است.");
+    } else {
+      const txt =
+        "📂 سرویس‌های شما:\n" +
+        u.services.map((s) => `- ${s.desc}`).join("\n");
+      bot.sendMessage(uid, txt);
+    }
+  }
+
+  if (text === "👤 حساب کاربری") {
+    bot.sendMessage(uid, `👤 حساب کاربری:\nآیدی عددی: ${uid}`);
+  }
+
+  if (text === "💳 کیف پول") {
+    bot.sendMessage(uid, "💳 کیف پول: 0 تومان\n(در حال حاضر کیف پول فعال نیست.)");
+  }
+
+  if (text === "🆘 پشتیبانی") {
+    bot.sendMessage(uid, "🆘 پشتیبانی:\nبرای ارتباط با پشتیبانی به این آیدی پیام دهید:\n@Azadtunnel1");
+  }
+});
+
+// -----------------------------
+// هندلر دکمه‌های اینلاین
+// -----------------------------
+bot.on("callback_query", async (c) => {
+  const uid = c.from.id;
+  const u = getUser(uid);
+
+  // دکمه مخصوص ارسال کانفیگ (فقط برای ادمین)
+  if (c.data.startsWith("sendcfg_")) {
+    if (uid !== ADMIN_ID) {
+      bot.answerCallbackQuery(c.id, { text: "این دکمه فقط برای ادمین است." });
+      return;
+    }
+
+    const targetUser = c.data.split("_")[1];
+    waitingConfig[uid] = targetUser;
+
+    bot.sendMessage(
+      uid,
+      "🔧 لطفاً کانفیگ یا عکس QR را ارسال کنید.\nپس از ارسال، ربات آن را برای کاربر ارسال می‌کند."
+    );
+
+    bot.answerCallbackQuery(c.id, { text: "در انتظار کانفیگ..." });
+    return;
+  }
+
+  // تایید عضویت
+  if (c.data === "check") {
+    if (await isMember(uid)) {
+      bot.editMessageText("✅ عضویت شما در کانال تایید شد.\n\nمنوی اصلی برای شما فعال شد. 🌟", {
+        chat
