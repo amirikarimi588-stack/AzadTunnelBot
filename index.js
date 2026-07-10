@@ -1,4 +1,6 @@
 const TelegramBot = require("node-telegram-bot-api");
+const fs = require("fs");
+const path = require("path");
 
 // -----------------------------
 // تنظیمات اصلی
@@ -11,46 +13,50 @@ const CARD_NUMBER = "6219861435903868";
 const bot = new TelegramBot(BOT_TOKEN, { polling: true });
 
 // -----------------------------
-// کیبورد ثابت پایین صفحه
+// دیتابیس ساده با فایل JSON
 // -----------------------------
-const mainKeyboardLayout = [
-  ["🛒 خرید سرویس", "📂 سرویس‌های من"],
-  ["👤 حساب کاربری", "💳 کیف پول"],
-  ["🧭 راهنمایی", "🆘 پشتیبانی"]
-];
+const DB_PATH = path.join(__dirname, "db.json");
 
-let keyboardActivated = {};
+let db = {
+  users: {}
+};
 
-function ensureKeyboard(uid) {
-  if (!keyboardActivated[uid]) {
-    bot.sendMessage(uid, ".", {
-      reply_markup: {
-        keyboard: mainKeyboardLayout,
-        resize_keyboard: true,
-        one_time_keyboard: false
-      }
-    });
-    keyboardActivated[uid] = true;
+function loadDB() {
+  try {
+    if (fs.existsSync(DB_PATH)) {
+      const raw = fs.readFileSync(DB_PATH, "utf8");
+      db = JSON.parse(raw);
+    }
+  } catch (e) {
+    db = { users: {} };
   }
 }
 
-// -----------------------------
-// دیتابیس ساده
-// -----------------------------
-let users = {};
-let waitingConfig = {};      // برای کانفیگ و QR
-let pendingWalletPay = {};   // پرداخت از کیف پول
-let walletTopupState = {};   // وارد کردن مبلغ شارژ
+function saveDB() {
+  try {
+    fs.writeFileSync(DB_PATH, JSON.stringify(db, null, 2), "utf8");
+  } catch (e) {
+    console.error("DB save error:", e);
+  }
+}
 
+loadDB();
+
+// -----------------------------
+// ساختار کاربر
+// -----------------------------
 function getUser(uid) {
-  if (!users[uid]) {
-    users[uid] = {
+  if (!db.users[uid]) {
+    db.users[uid] = {
+      id: uid,
+      username: null,
       services: [],          // {id, name, size, price, subLink, configText, qrFileId}
       pendingService: null,  // {name, size, price}
       balance: 0
     };
+    saveDB();
   }
-  return users[uid];
+  return db.users[uid];
 }
 
 // -----------------------------
@@ -66,10 +72,33 @@ async function isMember(uid) {
 }
 
 // -----------------------------
+// کیبورد اصلی
+// -----------------------------
+const mainKeyboard = {
+  keyboard: [
+    ["🛒 خرید سرویس", "📂 سرویس‌های من"],
+    ["👤 حساب کاربری", "💳 کیف پول"],
+    ["🧭 راهنمایی", "🆘 پشتیبانی"]
+  ],
+  resize_keyboard: true,
+  one_time_keyboard: false
+};
+
+// -----------------------------
+// وضعیت‌ها
+// -----------------------------
+let waitingConfig = {};      // برای لینک اشتراک و کانفیگ و QR
+let pendingWalletPay = {};   // پرداخت از کیف پول
+let walletTopupState = {};   // وارد کردن مبلغ شارژ
+
+// -----------------------------
 // /start
 // -----------------------------
 bot.onText(/\/start/, async (msg) => {
   const uid = msg.from.id;
+  const u = getUser(uid);
+  u.username = msg.from.username || u.username;
+  saveDB();
 
   if (!(await isMember(uid))) {
     bot.sendMessage(
@@ -85,8 +114,9 @@ bot.onText(/\/start/, async (msg) => {
       }
     );
   } else {
-    ensureKeyboard(uid);
-    bot.sendMessage(uid, "به آزاد تونل خوش آمدید 🏔️");
+    bot.sendMessage(uid, "به آزاد تونل خوش آمدید 🏔️", {
+      reply_markup: { ...mainKeyboard }
+    });
   }
 });
 
@@ -97,14 +127,12 @@ bot.on("message", (msg) => {
   const uid = msg.from.id;
   const text = msg.text;
   const u = getUser(uid);
-
-  if (msg.chat.type === "private") {
-    ensureKeyboard(uid);
-  }
+  u.username = msg.from.username || u.username;
+  saveDB();
 
   if (!text) return;
 
-  // ادمین در حالت انتظار لینک/کانفیگ
+  // ادمین در حالت انتظار لینک/کانفیگ برای سرویس
   if (waitingConfig[uid] && waitingConfig[uid].mode === "config") {
     const { target, serviceId, stage } = waitingConfig[uid];
     const tu = getUser(target);
@@ -117,22 +145,25 @@ bot.on("message", (msg) => {
     if (stage === "sub") {
       svc.subLink = text;
       waitingConfig[uid].stage = "cfg";
+      saveDB();
       bot.sendMessage(uid, "🔗 لینک اشتراک ثبت شد. حالا کانفیگ را ارسال کنید.");
       return;
     }
 
     if (stage === "cfg") {
       svc.configText = text;
+      saveDB();
       bot.sendMessage(
         target,
         `✅ لینک شما آماده‌ست\n\n` +
         `📛 نام سرویس: ${svc.name}\n` +
         `📏 حجم: ${svc.size}\n` +
-        `💰 قیمت: ${svc.price} تومان\n\n` +
+        `💰 قیمت: ${svc.price} تومان\n` +
+        `👤 نام کاربری شما: ${tu.username ? "@" + tu.username : "ثبت نشده"}\n\n` +
         (svc.subLink ? `🔗 لینک اشتراک:\n${svc.subLink}\n\n` : "") +
         `📄 کانفیگ:\n${svc.configText}`
       );
-      bot.sendMessage(uid, "✔️ کانفیگ برای کاربر ارسال و ذخیره شد.");
+      bot.sendMessage(uid, "✅ کانفیگ برای مخاطب ارسال شد.");
       waitingConfig[uid] = null;
       return;
     }
@@ -144,7 +175,8 @@ bot.on("message", (msg) => {
     if (isNaN(amount) || amount < 20000 || amount > 100000000) {
       bot.sendMessage(
         uid,
-        "❌ مبلغ نامعتبر است.\nحداقل ۲۰,۰۰۰ و حداکثر ۱۰۰,۰۰۰,۰۰۰ تومان.\nلطفاً دوباره مبلغ را به تومان وارد کنید."
+        "❌ مبلغ نامعتبر است.\nحداقل ۲۰,۰۰۰ و حداکثر ۱۰۰,۰۰۰,۰۰۰ تومان.\nلطفاً دوباره مبلغ را به تومان وارد کنید.",
+        { reply_markup: { ...mainKeyboard } }
       );
       return;
     }
@@ -152,7 +184,8 @@ bot.on("message", (msg) => {
     walletTopupState[uid].step = "photo";
     bot.sendMessage(
       uid,
-      `✅ مبلغ ${amount} تومان ثبت شد.\nحالا لطفاً عکس فیش واریزی را ارسال کنید.`
+      `✅ مبلغ ${amount} تومان ثبت شد.\nحالا لطفاً عکس فیش واریزی را ارسال کنید.`,
+      { reply_markup: { ...mainKeyboard } }
     );
     return;
   }
@@ -173,7 +206,9 @@ bot.on("message", (msg) => {
   // سرویس‌های من
   if (text === "📂 سرویس‌های من") {
     if (!u.services.length) {
-      bot.sendMessage(uid, "📂 هیچ سرویسی ثبت نشده است.");
+      bot.sendMessage(uid, "📂 هیچ سرویسی ثبت نشده است.", {
+        reply_markup: { ...mainKeyboard }
+      });
     } else {
       const buttons = u.services.map(s => {
         return [{ text: `🔐 ${s.name} (${s.size})`, callback_data: `mysvc_${s.id}` }];
@@ -189,7 +224,11 @@ bot.on("message", (msg) => {
   if (text === "👤 حساب کاربری") {
     bot.sendMessage(
       uid,
-      `👤 حساب کاربری:\nآیدی عددی: ${uid}\nموجودی کیف پول: ${u.balance} تومان`
+      `👤 حساب کاربری:\n` +
+      `آیدی عددی: ${uid}\n` +
+      `نام کاربری: ${u.username ? "@" + u.username : "ثبت نشده"}\n` +
+      `موجودی کیف پول: ${u.balance} تومان`,
+      { reply_markup: { ...mainKeyboard } }
     );
     return;
   }
@@ -225,14 +264,17 @@ bot.on("message", (msg) => {
       "و همچنین می‌توانید لینک‌های تکی را از طریق لینک اشتراک کپی کنید و در اپلیکیشن‌های زیر کپی کنید:\n\n" +
       "• NPV Tunnel\n" +
       "• V2RayNG\n" +
-      "and…"
+      "and…",
+      { reply_markup: { ...mainKeyboard } }
     );
     return;
   }
 
   // پشتیبانی
   if (text === "🆘 پشتیبانی") {
-    bot.sendMessage(uid, "🆘 پشتیبانی:\n@Azadtunnel1");
+    bot.sendMessage(uid, "🆘 پشتیبانی:\n@Azadtunnel1", {
+      reply_markup: { ...mainKeyboard }
+    });
     return;
   }
 });
@@ -249,16 +291,16 @@ bot.on("callback_query", async (c) => {
     if (await isMember(uid)) {
       bot.editMessageText("✅ عضویت شما در کانال تایید شد.\nمنوی اصلی فعال شد.", {
         chat_id: uid,
-        message_id: c.message.message_id
+        message_id: c.message.message_id,
+        reply_markup: { ...mainKeyboard }
       });
-      ensureKeyboard(uid);
     } else {
       bot.answerCallbackQuery(c.id, { text: "❌ هنوز عضو کانال نیستی." });
     }
     return;
   }
 
-  // افزایش موجودی کیف پول (از منو یا دکمه افزایش اعتبار)
+  // افزایش موجودی کیف پول
   if (c.data === "wallet_add" || c.data === "wallet_add_from_insufficient") {
     walletTopupState[uid] = { step: "amount", amount: null };
     bot.editMessageText(
@@ -294,6 +336,7 @@ bot.on("callback_query", async (c) => {
     const descName = `سرویس سنگین`;
     const descSize = `${size}GB / ۲ ماهه`;
     u.pendingService = { name: descName, size: descSize, price: Number(price) };
+    saveDB();
 
     bot.editMessageText(
       `📦 سرویس انتخابی:\n\n` +
@@ -358,6 +401,7 @@ bot.on("callback_query", async (c) => {
     const descName = `سرویس سبک`;
     const descSize = `${size}GB / ${monthText}`;
     u.pendingService = { name: descName, size: descSize, price: Number(price) };
+    saveDB();
 
     bot.editMessageText(
       `📦 سرویس انتخابی:\n\n` +
@@ -491,7 +535,8 @@ bot.on("callback_query", async (c) => {
     const ps = pw.service;
 
     tu.balance -= ps.price;
-    const newBalance = tu.balance;
+    if (tu.balance < 0) tu.balance = 0;
+    saveDB();
 
     const serviceId = Date.now().toString();
     tu.services.push({
@@ -503,6 +548,7 @@ bot.on("callback_query", async (c) => {
       configText: "",
       qrFileId: null
     });
+    saveDB();
 
     bot.sendMessage(
       targetUser,
@@ -510,8 +556,9 @@ bot.on("callback_query", async (c) => {
       `📛 سرویس: ${ps.name}\n` +
       `📏 حجم: ${ps.size}\n` +
       `💰 مبلغ ${ps.price} تومان بابت سرویس از کیف پول شما کسر شد.\n` +
-      `💼 موجودی فعلی کیف پول: ${newBalance} تومان\n\n` +
-      `لطفاً منتظر دریافت لینک و کانفیگ باشید.`
+      `💼 موجودی فعلی کیف پول: ${tu.balance} تومان\n\n` +
+      `لطفاً منتظر دریافت لینک و کانفیگ باشید.`,
+      { reply_markup: { ...mainKeyboard } }
     );
 
     bot.sendMessage(
@@ -519,6 +566,14 @@ bot.on("callback_query", async (c) => {
       `✔ پرداخت از کیف پول کاربر ${targetUser} تایید شد.\n` +
       `لطفاً لینک اشتراک، کانفیگ و QR را برای این سرویس ارسال کنید.`
     );
+
+    // آماده‌سازی برای دریافت لینک و کانفیگ از ادمین
+    waitingConfig[ADMIN_ID] = {
+      target: targetUser,
+      serviceId,
+      mode: "config",
+      stage: "sub"
+    };
 
     pendingWalletPay[targetUser] = null;
     bot.answerCallbackQuery(c.id, { text: "پرداخت تایید شد." });
@@ -538,7 +593,8 @@ bot.on("callback_query", async (c) => {
       `🔐 سرویس شما:\n\n` +
       `📛 نام سرویس: ${svc.name}\n` +
       `📏 حجم: ${svc.size}\n` +
-      `💰 قیمت: ${svc.price} تومان\n\n`;
+      `💰 قیمت: ${svc.price} تومان\n` +
+      `👤 نام کاربری شما: ${u.username ? "@" + u.username : "ثبت نشده"}\n\n`;
 
     if (svc.subLink) text += `🔗 لینک اشتراک:\n${svc.subLink}\n\n`;
     if (svc.configText) text += `📄 کانفیگ:\n${svc.configText}\n\n`;
@@ -565,7 +621,8 @@ bot.on("callback_query", async (c) => {
   if (c.data.startsWith("single_")) {
     bot.sendMessage(
       uid,
-      "برای کپی کردن لینک های تکی روی لینک سابسکریپشن خود کلیک کنید و لینک های تکی را کپی کنید"
+      "برای کپی کردن لینک های تکی روی لینک سابسکریپشن خود کلیک کنید و لینک های تکی را کپی کنید",
+      { reply_markup: { ...mainKeyboard } }
     );
     bot.answerCallbackQuery(c.id, { text: "متن راهنمای لینک‌های تکی ارسال شد." });
     return;
@@ -596,8 +653,15 @@ bot.on("callback_query", async (c) => {
       configText: "",
       qrFileId: null
     });
+    tu.pendingService = null;
+    saveDB();
 
-    waitingConfig[uid] = { target: targetUser, serviceId, mode: "config", stage: "sub" };
+    waitingConfig[ADMIN_ID] = {
+      target: targetUser,
+      serviceId,
+      mode: "config",
+      stage: "sub"
+    };
 
     bot.sendMessage(
       uid,
@@ -607,16 +671,18 @@ bot.on("callback_query", async (c) => {
     return;
   }
 
-  // تایید شارژ کیف پول (ادمین)
+  // تایید شارژ کیف پول (ادمین) با مبلغ از فیش
   if (c.data.startsWith("walletok_")) {
     if (uid !== ADMIN_ID) {
       bot.answerCallbackQuery(c.id, { text: "این دکمه فقط برای ادمین است." });
       return;
     }
-    const targetUser = c.data.split("_")[1];
+    const parts = c.data.split("_");
+    const targetUser = parts[1];
+    const amount = parseInt(parts[2], 10) || 0;
     const tu = getUser(targetUser);
-    const amount = parseInt(c.data.split("_")[2], 10) || 0;
     tu.balance += amount;
+    saveDB();
 
     bot.sendMessage(
       targetUser,
@@ -663,12 +729,13 @@ bot.on("photo", (msg) => {
     const svc = tu.services.find(s => s.id === serviceId);
     if (svc) {
       svc.qrFileId = msg.photo[msg.photo.length - 1].file_id;
+      saveDB();
       bot.sendPhoto(
         target,
         svc.qrFileId,
         { caption: "🔳 QR سرویس شما" }
       );
-      bot.sendMessage(uid, "✔️ QR برای کاربر ارسال و ذخیره شد.");
+      bot.sendMessage(uid, "✔️ QR برای مخاطب ارسال شد.");
     }
     waitingConfig[uid] = null;
     return;
@@ -677,7 +744,9 @@ bot.on("photo", (msg) => {
   // شارژ کیف پول (با مبلغ وارد شده)
   if (walletTopupState[uid] && walletTopupState[uid].step === "photo") {
     const amount = walletTopupState[uid].amount || 0;
-    bot.sendMessage(uid, "📸 فیش شارژ کیف پول دریافت شد. منتظر تایید باشید.");
+    bot.sendMessage(uid, "📸 فیش شارژ کیف پول دریافت شد. منتظر تایید باشید.", {
+      reply_markup: { ...mainKeyboard }
+    });
 
     bot.sendPhoto(ADMIN_ID, msg.photo[msg.photo.length - 1].file_id, {
       caption:
@@ -697,7 +766,9 @@ bot.on("photo", (msg) => {
 
   // فیش سرویس کارت به کارت
   if (u.pendingService) {
-    bot.sendMessage(uid, "📸 فیش سرویس دریافت شد. منتظر تایید باشید.");
+    bot.sendMessage(uid, "📸 فیش سرویس دریافت شد. منتظر تایید باشید.", {
+      reply_markup: { ...mainKeyboard }
+    });
 
     bot.sendPhoto(ADMIN_ID, msg.photo[msg.photo.length - 1].file_id, {
       caption:
@@ -718,31 +789,14 @@ bot.on("photo", (msg) => {
 
   bot.sendMessage(
     uid,
-    "❌ هیچ سفارشی یا درخواست شارژی ثبت نشده.\nابتدا از منوی «🛒 خرید سرویس» یا «💳 کیف پول» اقدام کنید."
+    "❌ هیچ سفارشی یا درخواست شارژی ثبت نشده.\nابتدا از منوی «🛒 خرید سرویس» یا «💳 کیف پول» اقدام کنید.",
+    { reply_markup: { ...mainKeyboard } }
   );
 });
 
 // -----------------------------
-// ثبت لینک اشتراک و QR با دستورات اختیاری
+// ثبت QR با دستور اختیاری
 // -----------------------------
-bot.onText(/\/setsub (\d+) (.+)/, (msg, match) => {
-  if (msg.from.id !== ADMIN_ID) return;
-
-  const targetUser = match[1];
-  const subLink = match[2];
-  const tu = getUser(targetUser);
-
-  if (!tu.services.length) {
-    bot.sendMessage(msg.chat.id, "این کاربر هیچ سرویسی ندارد.");
-    return;
-  }
-
-  const lastService = tu.services[tu.services.length - 1];
-  lastService.subLink = subLink;
-
-  bot.sendMessage(msg.chat.id, "🔗 لینک اشتراک برای آخرین سرویس این کاربر ثبت شد.");
-});
-
 bot.onText(/\/setqr (\d+)/, (msg, match) => {
   if (msg.from.id !== ADMIN_ID) return;
 
